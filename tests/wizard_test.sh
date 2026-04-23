@@ -61,7 +61,7 @@ make_env() {
   dir=$(mktemp -d)
   mkdir -p "$dir/bin" "$dir/.config/hypr/config"
 
-  cat > "$dir/bin/hyprctl" <<'PYEOF'
+  cat > "$dir/bin/hyprctl" << 'PYEOF'
 #!/usr/bin/env bash
 case "$*" in
   "monitors all -j")
@@ -81,7 +81,7 @@ PYEOF
   chmod +x "$dir/bin/hyprctl"
 
   # pgrep -x Hyprland returns 1 (not running) so the wizard skips `hyprctl reload`.
-  cat > "$dir/bin/pgrep" <<'SEOF'
+  cat > "$dir/bin/pgrep" << 'SEOF'
 #!/usr/bin/env bash
 [[ "$*" == "-x Hyprland" ]] && exit 1
 exec /usr/bin/pgrep "$@"
@@ -110,7 +110,8 @@ test_fresh_run_generates_expected_files() {
   say ""
   say "test: fresh wizard run generates monitors/workspaces/layouts.sh"
   local env log cfg
-  env=$(make_env); log="$env/run.log"
+  env=$(make_env)
+  log="$env/run.log"
   cfg="$env/.config/hypr/config"
 
   # Answers: 3 layouts (home, work, single); current=1;
@@ -120,21 +121,22 @@ test_fresh_run_generates_expected_files() {
   local answers=$'3\nhome\nwork\nsingle\n1\n\n\n2\ny\n\nDell G2725D WORK\n1\n\n\n'
   run_wizard "$env" "$answers" "$log"
 
-  assert_file "monitors.home.conf exists"       "$cfg/monitors.home.conf"
-  assert_file "monitors.work.conf exists"       "$cfg/monitors.work.conf"
-  assert_file "monitors.single.conf exists"     "$cfg/monitors.single.conf"
-  assert_file "workspaces.home.conf exists"     "$cfg/workspaces.home.conf"
-  assert_file "workspaces.work.conf exists"     "$cfg/workspaces.work.conf"
-  assert_file "workspaces.single.conf exists"   "$cfg/workspaces.single.conf"
-  assert_file "layouts.sh exists"               "$cfg/layouts.sh"
+  assert_file "monitors.home.conf exists" "$cfg/monitors.home.conf"
+  assert_file "monitors.work.conf exists" "$cfg/monitors.work.conf"
+  assert_file "monitors.single.conf exists" "$cfg/monitors.single.conf"
+  assert_file "workspaces.home.conf exists" "$cfg/workspaces.home.conf"
+  assert_file "workspaces.work.conf exists" "$cfg/workspaces.work.conf"
+  assert_file "workspaces.single.conf exists" "$cfg/workspaces.single.conf"
+  assert_file "layouts.sh exists" "$cfg/layouts.sh"
 
   # Home captured 3 real descs + 1 disabled laptop.
   assert_contains "home has Dell U2723QE ABC" "$(cat "$cfg/monitors.home.conf")" "desc:Dell U2723QE ABC,2560x1440@120"
-  assert_contains "home has disabled eDP"     "$(cat "$cfg/monitors.home.conf")" "monitor=eDP-1,disable"
+  assert_contains "home has disabled eDP" "$(cat "$cfg/monitors.home.conf")" "monitor=eDP-1,disable"
   assert_contains "refresh rate rounded to 120" "$(cat "$cfg/monitors.home.conf")" "@120"
 
   # 3/4/3 workspace split for home.
-  local hw; hw=$(grep -c 'Dell U2723QE ABC' "$cfg/workspaces.home.conf")
+  local hw
+  hw=$(grep -c 'Dell U2723QE ABC' "$cfg/workspaces.home.conf")
   assert "home left external gets 3 workspaces" "$hw" "3"
   hw=$(grep -c 'Dell U2723QE DEF' "$cfg/workspaces.home.conf")
   assert "home middle external gets 4 workspaces" "$hw" "4"
@@ -158,13 +160,15 @@ test_sanitization_and_dedup() {
   say ""
   say "test: layout names reject spaces and duplicates"
   local env log
-  env=$(make_env); log="$env/run.log"
+  env=$(make_env)
+  log="$env/run.log"
 
   # "bad name" (space) then "home"; then duplicate "home"; then "work"; then "single".
   local answers=$'3\nbad name\nhome\nhome\nwork\nsingle\n1\n\n\n2\ny\n\nMARK\n1\n\n\n'
   run_wizard "$env" "$answers" "$log"
 
-  local out; out=$(cat "$log")
+  local out
+  out=$(cat "$log")
   assert_contains "rejects space in name" "$out" "names may contain only letters, digits"
   assert_contains "rejects duplicate name" "$out" "already used for an earlier layout"
 
@@ -175,28 +179,32 @@ test_backup_on_different_content() {
   say ""
   say "test: re-run backs up only files that changed"
   local env log cfg
-  env=$(make_env); log="$env/run.log"
+  env=$(make_env)
+  log="$env/run.log"
   cfg="$env/.config/hypr/config"
 
   local answers=$'3\nhome\nwork\nsingle\n1\n\n\n2\ny\n\nMARK_V1\n1\n\n\n'
   run_wizard "$env" "$answers" "$log"
-  [[ -d "$cfg/.backups" ]] && { say "  FAIL first run must not create backups"; FAIL=$((FAIL + 1)); }
+  [[ -d "$cfg/.backups" ]] && {
+    say "  FAIL first run must not create backups"
+    FAIL=$((FAIL + 1))
+  }
 
   # Re-run with the same answers except a different marker for 'work'.
   local answers2=$'3\nhome\nwork\nsingle\n1\n\n\n2\ny\n\nMARK_V2\n1\n\n\n'
   run_wizard "$env" "$answers2" "$log"
 
   local bak_files
-  bak_files=$(find "$cfg/.backups" -type f 2>/dev/null | wc -l)
+  bak_files=$(find "$cfg/.backups" -type f 2> /dev/null | wc -l)
   assert "exactly 1 file backed up (layouts.sh)" "$bak_files" "1"
   local bak_path
-  bak_path=$(find "$cfg/.backups" -type f 2>/dev/null | head -n1)
+  bak_path=$(find "$cfg/.backups" -type f 2> /dev/null | head -n1)
   assert_contains "backup is layouts.sh" "$bak_path" "layouts.sh"
 
   # Re-run with IDENTICAL answers: no new backup files.
   run_wizard "$env" "$answers2" "$log"
   local bak_files_after
-  bak_files_after=$(find "$cfg/.backups" -type f 2>/dev/null | wc -l)
+  bak_files_after=$(find "$cfg/.backups" -type f 2> /dev/null | wc -l)
   assert "no extra backups when content identical" "$bak_files_after" "1"
 
   rm -rf "$env"
@@ -227,4 +235,4 @@ say "  passed: $PASS"
 say "  failed: $FAIL"
 say "=========================================="
 
-(( FAIL == 0 ))
+((FAIL == 0))
