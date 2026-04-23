@@ -16,10 +16,10 @@ USER_HOME=$(getent passwd "$LOGGED_USER" | cut -d: -f6)
 # Resolve Hyprland's instance signature. Prefer the recorded marker; fall back to
 # the first directory under /tmp/hypr. find-printf is used instead of `ls` so the
 # output doesn't depend on locale / non-alphanumeric directory names.
-HIS=$(cat /tmp/hypr/.hyprland_instance 2>/dev/null || \
-      find /tmp/hypr -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | head -n1)
+HIS=$(cat /tmp/hypr/.hyprland_instance 2> /dev/null ||
+  find /tmp/hypr -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2> /dev/null | head -n1)
 
 sudo -u "$LOGGED_USER" \
-    HYPRLAND_INSTANCE_SIGNATURE="$HIS" \
-    XDG_RUNTIME_DIR="/run/user/$(id -u "$LOGGED_USER")" \
-    "$USER_HOME/.config/hypr/scripts/location-switch" &
+  HYPRLAND_INSTANCE_SIGNATURE="$HIS" \
+  XDG_RUNTIME_DIR="/run/user/$(id -u "$LOGGED_USER")" \
+  "$USER_HOME/.config/hypr/scripts/location-switch" &

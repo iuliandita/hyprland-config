@@ -19,16 +19,16 @@ set -euo pipefail
 REPO_TARBALL="https://github.com/iuliandita/hyprland-config/archive/refs/heads/main.tar.gz"
 DEST="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
 
-RUN_WIZARD=auto   # auto | yes | no
+RUN_WIZARD=auto # auto | yes | no
 SKIP_DEPS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --wizard)    RUN_WIZARD=yes ;;
+    --wizard) RUN_WIZARD=yes ;;
     --no-wizard) RUN_WIZARD=no ;;
     --skip-deps) SKIP_DEPS=1 ;;
-    -h|--help)
-      cat <<EOF
+    -h | --help)
+      cat << EOF
 Usage: install.sh [--wizard|--no-wizard] [--skip-deps]
 
   --wizard       Force the interactive layout wizard. Fails if TTY or Hyprland missing.
@@ -40,7 +40,10 @@ otherwise falls back to seeding the 'single' symlinks.
 EOF
       exit 0
       ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 2
+      ;;
   esac
   shift
 done
@@ -50,14 +53,26 @@ done
 # ID_LIKE is the right field for derivatives: Garuda/CachyOS/Manjaro say 'arch',
 # Pop/Mint/Ubuntu say 'debian', Nobara/Bazzite say 'fedora'.
 detect_distro() {
-  [[ -r /etc/os-release ]] || { echo unknown; return; }
+  [[ -r /etc/os-release ]] || {
+    echo unknown
+    return
+  }
   local id id_like
   id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2- | tr -d '"')
   id_like=$(grep -E '^ID_LIKE=' /etc/os-release | cut -d= -f2- | tr -d '"')
   case " $id $id_like " in
-    *\ arch\ *|*\ cachyos\ *|*\ endeavouros\ *|*\ manjaro\ *|*\ garuda\ *|*\ artix\ *) echo arch; return;;
-    *\ debian\ *|*\ ubuntu\ *|*\ pop\ *|*\ linuxmint\ *|*\ elementary\ *|*\ zorin\ *|*\ kali\ *|*\ raspbian\ *) echo debian; return;;
-    *\ fedora\ *|*\ nobara\ *|*\ bazzite\ *|*\ silverblue\ *|*\ kinoite\ *|*\ rhel\ *|*\ centos\ *) echo fedora; return;;
+    *\ arch\ * | *\ cachyos\ * | *\ endeavouros\ * | *\ manjaro\ * | *\ garuda\ * | *\ artix\ *)
+      echo arch
+      return
+      ;;
+    *\ debian\ * | *\ ubuntu\ * | *\ pop\ * | *\ linuxmint\ * | *\ elementary\ * | *\ zorin\ * | *\ kali\ * | *\ raspbian\ *)
+      echo debian
+      return
+      ;;
+    *\ fedora\ * | *\ nobara\ * | *\ bazzite\ * | *\ silverblue\ * | *\ kinoite\ * | *\ rhel\ * | *\ centos\ *)
+      echo fedora
+      return
+      ;;
   esac
   echo unknown
 }
@@ -66,13 +81,13 @@ detect_distro() {
 pkg_for() {
   local tool="$1" family="$2"
   case "$family:$tool" in
-    arch:notify-send)    echo "libnotify" ;;
-    debian:notify-send)  echo "libnotify-bin" ;;
-    fedora:notify-send)  echo "libnotify" ;;
-    arch:ncat)           echo "nmap" ;;
-    fedora:ncat)         echo "nmap-ncat" ;;
-    debian:mako)         echo "mako-notifier" ;;
-    *)                   echo "$tool" ;;
+    arch:notify-send) echo "libnotify" ;;
+    debian:notify-send) echo "libnotify-bin" ;;
+    fedora:notify-send) echo "libnotify" ;;
+    arch:ncat) echo "nmap" ;;
+    fedora:ncat) echo "nmap-ncat" ;;
+    debian:mako) echo "mako-notifier" ;;
+    *) echo "$tool" ;;
   esac
 }
 
@@ -80,21 +95,21 @@ pkg_for() {
 in_default_repo() {
   local tool="$1" family="$2"
   case "$family:$tool" in
-    arch:nwg-drawer|arch:nwg-dock-hyprland|arch:ghostty|arch:zen-browser) return 1 ;;
-    debian:hyprland|debian:hypridle|debian:hyprlock) return 1 ;;
-    debian:swappy|debian:nwg-drawer|debian:nwg-dock-hyprland|debian:ghostty|debian:zen-browser) return 1 ;;
-    fedora:hyprland|fedora:hypridle|fedora:hyprlock) return 1 ;;
-    fedora:swappy|fedora:wob|fedora:nwg-drawer|fedora:nwg-dock-hyprland|fedora:ghostty|fedora:zen-browser) return 1 ;;
+    arch:nwg-drawer | arch:nwg-dock-hyprland | arch:ghostty | arch:zen-browser) return 1 ;;
+    debian:hyprland | debian:hypridle | debian:hyprlock) return 1 ;;
+    debian:swappy | debian:nwg-drawer | debian:nwg-dock-hyprland | debian:ghostty | debian:zen-browser) return 1 ;;
+    fedora:hyprland | fedora:hypridle | fedora:hyprlock) return 1 ;;
+    fedora:swappy | fedora:wob | fedora:nwg-drawer | fedora:nwg-dock-hyprland | fedora:ghostty | fedora:zen-browser) return 1 ;;
     *) return 0 ;;
   esac
 }
 
 install_cmd_prefix() {
   case "$1" in
-    arch)   echo "sudo pacman -S --needed" ;;
+    arch) echo "sudo pacman -S --needed" ;;
     debian) echo "sudo apt-get install -y" ;;
     fedora) echo "sudo dnf install -y" ;;
-    *)      echo "" ;;
+    *) echo "" ;;
   esac
 }
 
@@ -102,7 +117,7 @@ install_cmd_prefix() {
 prompt_tty() {
   local q="$1" default="${2-}" ans
   if [[ -r /dev/tty ]]; then
-    read -r -p "$q" ans </dev/tty
+    read -r -p "$q" ans < /dev/tty
   else
     ans=""
   fi
@@ -110,22 +125,25 @@ prompt_tty() {
 }
 
 dep_check() {
-  (( SKIP_DEPS == 1 )) && { echo "==> skipped dependency check"; return; }
+  ((SKIP_DEPS == 1)) && {
+    echo "==> skipped dependency check"
+    return
+  }
 
   local family
   family=$(detect_distro)
   echo "==> checking dependencies (detected distro family: $family)"
 
   # Hard require Hyprland.
-  if ! command -v Hyprland >/dev/null 2>&1 && ! command -v hyprland >/dev/null 2>&1; then
+  if ! command -v Hyprland > /dev/null 2>&1 && ! command -v hyprland > /dev/null 2>&1; then
     {
       echo
       echo "error: Hyprland is not installed. This config is meaningless without it."
       case "$family" in
-        arch)   echo "  install: sudo pacman -S hyprland" ;;
+        arch) echo "  install: sudo pacman -S hyprland" ;;
         debian) echo "  install: sudo apt install hyprland  # Debian trixie / Ubuntu 24.04+" ;;
         fedora) echo "  install: sudo dnf copr enable solopasha/hyprland && sudo dnf install hyprland" ;;
-        *)      echo "  see https://wiki.hyprland.org/Getting-Started/Installation/" ;;
+        *) echo "  see https://wiki.hyprland.org/Getting-Started/Installation/" ;;
       esac
     } >&2
     exit 1
@@ -141,13 +159,13 @@ dep_check() {
 
   local -a missing_core=() missing_ux=() missing_defaults=()
   local t
-  for t in "${tools_core[@]}";     do command -v "$t" >/dev/null 2>&1 || missing_core+=("$t"); done
-  for t in "${tools_ux[@]}";       do command -v "$t" >/dev/null 2>&1 || missing_ux+=("$t"); done
-  for t in "${tools_defaults[@]}"; do command -v "$t" >/dev/null 2>&1 || missing_defaults+=("$t"); done
+  for t in "${tools_core[@]}"; do command -v "$t" > /dev/null 2>&1 || missing_core+=("$t"); done
+  for t in "${tools_ux[@]}"; do command -v "$t" > /dev/null 2>&1 || missing_ux+=("$t"); done
+  for t in "${tools_defaults[@]}"; do command -v "$t" > /dev/null 2>&1 || missing_defaults+=("$t"); done
 
-  if (( ${#missing_core[@]} == 0 )) && (( ${#missing_ux[@]} == 0 )); then
+  if ((${#missing_core[@]} == 0)) && ((${#missing_ux[@]} == 0)); then
     echo "    all core + UX dependencies present"
-    if (( ${#missing_defaults[@]} > 0 )); then
+    if ((${#missing_defaults[@]} > 0)); then
       echo "    default-app tools missing (ok to skip, swap in config/defaults.conf):"
       echo "      ${missing_defaults[*]}"
     fi
@@ -156,8 +174,8 @@ dep_check() {
 
   echo "    the following tools are missing:"
   for t in "${missing_core[@]}"; do echo "      [core] $t"; done
-  for t in "${missing_ux[@]}";   do echo "      [ux]   $t"; done
-  if (( ${#missing_defaults[@]} > 0 )); then
+  for t in "${missing_ux[@]}"; do echo "      [ux]   $t"; done
+  if ((${#missing_defaults[@]} > 0)); then
     echo "    (default-app suggestions, safe to skip): ${missing_defaults[*]}"
   fi
 
@@ -169,7 +187,7 @@ dep_check() {
       pkg=$(pkg_for "$t" "$family")
       have=0
       for p in "${to_install[@]}"; do [[ "$p" == "$pkg" ]] && have=1; done
-      (( have == 0 )) && to_install+=("$pkg")
+      ((have == 0)) && to_install+=("$pkg")
     else
       manual+=("$t")
     fi
@@ -177,7 +195,7 @@ dep_check() {
 
   local prefix install_cmd=""
   prefix=$(install_cmd_prefix "$family")
-  if [[ -n "$prefix" ]] && (( ${#to_install[@]} > 0 )); then
+  if [[ -n "$prefix" ]] && ((${#to_install[@]} > 0)); then
     install_cmd="$prefix ${to_install[*]}"
   fi
 
@@ -186,7 +204,7 @@ dep_check() {
     echo "Install command for $family:"
     echo "  $install_cmd"
   fi
-  if (( ${#manual[@]} > 0 )); then
+  if ((${#manual[@]} > 0)); then
     echo "Not in $family's default repos (build manually / enable AUR / COPR / PPA):"
     echo "  ${manual[*]}"
   fi
@@ -213,7 +231,7 @@ dep_check() {
       fi
       ;;
     m*)
-      prompt_tty "Install the tools in another shell, then press enter to continue... " "" >/dev/null
+      prompt_tty "Install the tools in another shell, then press enter to continue... " "" > /dev/null
       ;;
     q*)
       echo "    quitting. No files were written."
@@ -230,7 +248,7 @@ dep_check
 # ---- source location (local vs bootstrap) ----
 SCRIPT_DIR=""
 if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2> /dev/null && pwd || true)"
 fi
 
 if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/hypr" ]]; then
@@ -262,7 +280,7 @@ safe_install() {
     if cmp -s "$src" "$dst"; then
       return 0
     fi
-    if (( BACKUP_INIT == 0 )); then
+    if ((BACKUP_INIT == 0)); then
       mkdir -p "$BACKUP_DIR"
       echo "==> backing up existing files to $BACKUP_DIR"
       BACKUP_INIT=1
@@ -289,7 +307,7 @@ fi
 for f in "$SRC"/config/*.conf; do
   name=$(basename "$f")
   case "$name" in
-    monitors.*.conf|workspaces.*.conf)
+    monitors.*.conf | workspaces.*.conf)
       if [[ ! -e "$DEST/config/$name" ]]; then
         install -m 644 "$f" "$DEST/config/$name"
       fi
@@ -318,9 +336,9 @@ fi
 # ---- wizard ----
 can_wizard() {
   [[ -r /dev/tty ]] || return 1
-  command -v hyprctl >/dev/null 2>&1 || return 1
-  command -v jq      >/dev/null 2>&1 || return 1
-  hyprctl monitors -j >/dev/null 2>&1 || return 1
+  command -v hyprctl > /dev/null 2>&1 || return 1
+  command -v jq > /dev/null 2>&1 || return 1
+  hyprctl monitors -j > /dev/null 2>&1 || return 1
 }
 
 case "$RUN_WIZARD" in

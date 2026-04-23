@@ -8,7 +8,7 @@ DELAY=1.5 # seconds to let monitors settle before reloading
 # shellcheck source=/dev/null
 . "$CONFIG_DIR/layouts.sh"
 
-JSON=$(hyprctl monitors all -j 2>/dev/null || echo '[]')
+JSON=$(hyprctl monitors all -j 2> /dev/null || echo '[]')
 CURRENT_LOCATION=$(detect_location "$JSON")
 
 # Only update symlinks if the target layout's files exist.
@@ -28,10 +28,10 @@ else
 fi
 
 if [[ $NEEDS_UPDATE -eq 1 ]]; then
-  ln -sfn "$CONFIG_DIR/monitors.$CURRENT_LOCATION.conf"   "$CONFIG_DIR/monitors.conf"
+  ln -sfn "$CONFIG_DIR/monitors.$CURRENT_LOCATION.conf" "$CONFIG_DIR/monitors.conf"
   ln -sfn "$CONFIG_DIR/workspaces.$CURRENT_LOCATION.conf" "$CONFIG_DIR/workspaces.conf"
 
-  if pgrep -x Hyprland >/dev/null; then
+  if pgrep -x Hyprland > /dev/null; then
     sleep "$DELAY"
     hyprctl reload
     sleep 0.5
@@ -62,17 +62,17 @@ if [[ $NEEDS_UPDATE -eq 1 ]]; then
     while read -r ws; do
       target="${PINNED_MONITOR[$ws]:-}"
       [[ -n "$target" ]] || continue
-      hyprctl dispatch moveworkspacetomonitor "$ws" "$target" >/dev/null 2>&1 || true
+      hyprctl dispatch moveworkspacetomonitor "$ws" "$target" > /dev/null 2>&1 || true
     done < <(hyprctl workspaces -j | jq -r '.[].id')
 
     # 2. Switch each monitor to its default workspace.
     for entry in "${DEFAULTS[@]}"; do
       target="${entry%::*}"
       ws="${entry##*::}"
-      hyprctl dispatch focusmonitor "$target" >/dev/null 2>&1 || true
-      hyprctl dispatch workspace "$ws" >/dev/null 2>&1 || true
+      hyprctl dispatch focusmonitor "$target" > /dev/null 2>&1 || true
+      hyprctl dispatch workspace "$ws" > /dev/null 2>&1 || true
     done
   fi
 
-  notify-send "Hyprland" "Switched to $CURRENT_LOCATION configuration" 2>/dev/null || true
+  notify-send "Hyprland" "Switched to $CURRENT_LOCATION configuration" 2> /dev/null || true
 fi

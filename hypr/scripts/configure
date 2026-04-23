@@ -8,13 +8,16 @@ set -euo pipefail
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/config"
 
-die() { echo "error: $*" >&2; exit 1; }
-need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"; }
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+need() { command -v "$1" > /dev/null 2>&1 || die "missing dependency: $1"; }
 
 need hyprctl
 need jq
 
-ALL_JSON=$(hyprctl monitors all -j 2>/dev/null) || die "hyprctl monitors failed. Is Hyprland running?"
+ALL_JSON=$(hyprctl monitors all -j 2> /dev/null) || die "hyprctl monitors failed. Is Hyprland running?"
 ACTIVE_JSON=$(echo "$ALL_JSON" | jq '[.[] | select(.disabled != true)]')
 ACTIVE_COUNT=$(echo "$ACTIVE_JSON" | jq 'length')
 
@@ -22,7 +25,7 @@ ACTIVE_COUNT=$(echo "$ACTIVE_JSON" | jq 'length')
 # (e.g. when called from install.sh running under `curl | bash`).
 if [[ ! -t 0 ]]; then
   [[ -r /dev/tty ]] || die "no TTY available for prompts"
-  exec </dev/tty
+  exec < /dev/tty
 fi
 
 ask() {
@@ -42,8 +45,14 @@ ask_yn() {
     read -r -p "$question [$default]: " answer
     answer="${answer:-$default}"
     case "${answer,,}" in
-      y|yes) echo y; return;;
-      n|no)  echo n; return;;
+      y | yes)
+        echo y
+        return
+        ;;
+      n | no)
+        echo n
+        return
+        ;;
     esac
   done
 }
@@ -51,16 +60,17 @@ ask_yn() {
 # Recommended workspace split for N monitors.
 dist_for() {
   case "$1" in
-    1) echo "10";;
-    2) echo "5,5";;
-    3) echo "3,4,3";;
-    4) echo "2,3,3,2";;
+    1) echo "10" ;;
+    2) echo "5,5" ;;
+    3) echo "3,4,3" ;;
+    4) echo "2,3,3,2" ;;
     *)
       local n=$1 base rem i c out=""
-      base=$((10 / n)); rem=$((10 % n))
-      for ((i=0; i<n; i++)); do
+      base=$((10 / n))
+      rem=$((10 % n))
+      for ((i = 0; i < n; i++)); do
         c=$base
-        if (( i < rem )); then c=$((c+1)); fi
+        if ((i < rem)); then c=$((c + 1)); fi
         out+=",$c"
       done
       echo "${out#,}"
@@ -77,7 +87,7 @@ validate_dist() {
     [[ "$n" =~ ^[0-9]+$ ]] || return 1
     sum=$((sum + n))
   done
-  (( sum == 10 )) || return 1
+  ((sum == 10)) || return 1
 }
 
 # ---- intro ----
@@ -95,9 +105,18 @@ echo
 
 # ---- layout count + names ----
 case "$ACTIVE_COUNT" in
-  1) DEFAULT_LAYOUTS=("single");                 DEFAULT_COUNT=1;;
-  2) DEFAULT_LAYOUTS=("home" "single");          DEFAULT_COUNT=2;;
-  *) DEFAULT_LAYOUTS=("home" "work" "single");   DEFAULT_COUNT=3;;
+  1)
+    DEFAULT_LAYOUTS=("single")
+    DEFAULT_COUNT=1
+    ;;
+  2)
+    DEFAULT_LAYOUTS=("home" "single")
+    DEFAULT_COUNT=2
+    ;;
+  *)
+    DEFAULT_LAYOUTS=("home" "work" "single")
+    DEFAULT_COUNT=3
+    ;;
 esac
 
 while :; do
@@ -109,19 +128,22 @@ done
 # Sanitize layout names: lowercase letters/digits/_- only. Reject duplicates.
 # If the default has spaces or quoting, it still gets rejected and re-asked.
 LAYOUT_NAMES=()
-for ((i=0; i<LAYOUT_COUNT; i++)); do
-  default="${DEFAULT_LAYOUTS[$i]:-layout$((i+1))}"
+for ((i = 0; i < LAYOUT_COUNT; i++)); do
+  default="${DEFAULT_LAYOUTS[$i]:-layout$((i + 1))}"
   while :; do
-    name=$(ask "  Layout $((i+1)) name" "$default")
+    name=$(ask "  Layout $((i + 1)) name" "$default")
     if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
       echo "    -> names may contain only letters, digits, '_', '-' (no spaces or punctuation)."
       continue
     fi
     dup=0
     for existing in "${LAYOUT_NAMES[@]}"; do
-      if [[ "$existing" == "$name" ]]; then dup=1; break; fi
+      if [[ "$existing" == "$name" ]]; then
+        dup=1
+        break
+      fi
     done
-    if (( dup == 1 )); then
+    if ((dup == 1)); then
       echo "    -> '$name' is already used for an earlier layout. Pick another."
       continue
     fi
@@ -133,12 +155,12 @@ echo
 
 # ---- which layout is the current one? ----
 echo "Which layout matches your CURRENT setup? It will be filled in from detected hardware."
-for ((i=0; i<LAYOUT_COUNT; i++)); do
-  echo "  $((i+1))) ${LAYOUT_NAMES[$i]}"
+for ((i = 0; i < LAYOUT_COUNT; i++)); do
+  echo "  $((i + 1))) ${LAYOUT_NAMES[$i]}"
 done
 while :; do
   CURRENT_CHOICE=$(ask "  Choice" "1")
-  if [[ "$CURRENT_CHOICE" =~ ^[1-9][0-9]*$ ]] && (( CURRENT_CHOICE >= 1 && CURRENT_CHOICE <= LAYOUT_COUNT )); then
+  if [[ "$CURRENT_CHOICE" =~ ^[1-9][0-9]*$ ]] && ((CURRENT_CHOICE >= 1 && CURRENT_CHOICE <= LAYOUT_COUNT)); then
     break
   fi
   echo "    -> enter a number between 1 and $LAYOUT_COUNT."
@@ -153,10 +175,10 @@ declare -A MARKERS=()
 TMPDIR_WIZARD=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_WIZARD"' EXIT
 
-for ((i=0; i<LAYOUT_COUNT; i++)); do
+for ((i = 0; i < LAYOUT_COUNT; i++)); do
   name="${LAYOUT_NAMES[$i]}"
   echo
-  if (( i == CURRENT_IDX )); then
+  if ((i == CURRENT_IDX)); then
     echo "--- '$name' (CURRENT, $ACTIVE_COUNT monitor(s)) ---"
     mcount=$ACTIVE_COUNT
     # Write monitors.<name>.conf from detected hardware.
@@ -193,12 +215,12 @@ for ((i=0; i<LAYOUT_COUNT; i++)); do
 
     has_laptop="n"
     has_edp=0
-    if echo "$ALL_JSON" | jq -e '.[] | select(.name | startswith("eDP"))' >/dev/null 2>&1; then
+    if echo "$ALL_JSON" | jq -e '.[] | select(.name | startswith("eDP"))' > /dev/null 2>&1; then
       has_edp=1
     fi
-    if (( has_edp == 1 )) && (( mcount > 1 )); then
+    if ((has_edp == 1)) && ((mcount > 1)); then
       has_laptop=$(ask_yn "  Include laptop display (eDP-*) in this layout?" "y")
-    elif (( mcount == 1 )) && (( has_edp == 1 )); then
+    elif ((mcount == 1)) && ((has_edp == 1)); then
       has_laptop="y"
     fi
 
@@ -215,7 +237,7 @@ for ((i=0; i<LAYOUT_COUNT; i++)); do
         "# Find EDID descriptions with:" \
         "#   hyprctl monitors all -j | jq -r '.[] | \"\\(.name)\\t\\(.description)\"'" \
         ""
-      for ((j=1; j<=externals; j++)); do
+      for ((j = 1; j <= externals; j++)); do
         echo "monitor=desc:TODO_external_$j,preferred,auto,1.0"
       done
       if [[ "$has_laptop" == "y" ]]; then
@@ -225,7 +247,7 @@ for ((i=0; i<LAYOUT_COUNT; i++)); do
 
     # Workspace-target list (one entry per monitor).
     {
-      for ((j=1; j<=externals; j++)); do
+      for ((j = 1; j <= externals; j++)); do
         echo "desc:TODO_external_$j"
       done
       if [[ "$has_laptop" == "y" ]]; then
@@ -251,12 +273,12 @@ for ((i=0; i<LAYOUT_COUNT; i++)); do
     mapfile -t targets < "$TMPDIR_WIZARD/mons.$name.list"
     IFS=',' read -ra parts <<< "$dist"
     ws=1
-    for ((mi=0; mi<mcount; mi++)); do
+    for ((mi = 0; mi < mcount; mi++)); do
       target="${targets[$mi]}"
       count=${parts[$mi]}
       first=1
-      for ((c=0; c<count; c++)); do
-        if (( first == 1 )); then
+      for ((c = 0; c < count; c++)); do
+        if ((first == 1)); then
           echo "workspace=$ws,monitor:$target,default:true"
           first=0
         else
@@ -268,7 +290,7 @@ for ((i=0; i<LAYOUT_COUNT; i++)); do
   } > "$TMPDIR_WIZARD/workspaces.$name.conf"
 
   # Marker for auto-detection.
-  if (( i == CURRENT_IDX )); then
+  if ((i == CURRENT_IDX)); then
     prompt="  Marker (unique EDID description for auto-detect; blank = fallback)"
     marker=$(ask "$prompt" "$default_marker")
   else
@@ -287,7 +309,7 @@ for name in "${LAYOUT_NAMES[@]}"; do
     FALLBACK_COUNT=$((FALLBACK_COUNT + 1))
   fi
 done
-if (( FALLBACK_COUNT == 0 )); then
+if ((FALLBACK_COUNT == 0)); then
   echo
   echo "note: no layout is flagged as fallback. The last-listed layout '${LAYOUT_NAMES[-1]}' will be used"
   echo "      when no marker matches."
@@ -308,7 +330,7 @@ safe_write() {
     if cmp -s "$src" "$dst"; then
       return 0
     fi
-    if (( BACKUP_INIT == 0 )); then
+    if ((BACKUP_INIT == 0)); then
       mkdir -p "$BACKUP_DIR"
       echo "  backing up existing files to $BACKUP_DIR"
       BACKUP_INIT=1
@@ -323,7 +345,7 @@ safe_write() {
 }
 
 for name in "${LAYOUT_NAMES[@]}"; do
-  safe_write "$TMPDIR_WIZARD/monitors.$name.conf"   "$CONFIG_DIR/monitors.$name.conf"
+  safe_write "$TMPDIR_WIZARD/monitors.$name.conf" "$CONFIG_DIR/monitors.$name.conf"
   safe_write "$TMPDIR_WIZARD/workspaces.$name.conf" "$CONFIG_DIR/workspaces.$name.conf"
   echo "  wrote monitors.$name.conf, workspaces.$name.conf"
 done
@@ -358,7 +380,7 @@ safe_write "$TMPDIR_WIZARD/layouts.sh" "$CONFIG_DIR/layouts.sh"
 echo "  wrote layouts.sh"
 
 # ---- point active symlinks at the current layout ----
-ln -sfn "$CONFIG_DIR/monitors.$CURRENT_NAME.conf"   "$CONFIG_DIR/monitors.conf"
+ln -sfn "$CONFIG_DIR/monitors.$CURRENT_NAME.conf" "$CONFIG_DIR/monitors.conf"
 ln -sfn "$CONFIG_DIR/workspaces.$CURRENT_NAME.conf" "$CONFIG_DIR/workspaces.conf"
 echo
 echo "Linked current layout:"
@@ -366,20 +388,20 @@ echo "  monitors.conf   -> monitors.$CURRENT_NAME.conf"
 echo "  workspaces.conf -> workspaces.$CURRENT_NAME.conf"
 
 # ---- reload ----
-if pgrep -x Hyprland >/dev/null; then
+if pgrep -x Hyprland > /dev/null; then
   echo
   echo "Reloading Hyprland..."
-  hyprctl reload >/dev/null || true
+  hyprctl reload > /dev/null || true
 fi
 
 # ---- summary ----
 echo
 echo "Done."
 STUB_LAYOUTS=()
-for ((i=0; i<LAYOUT_COUNT; i++)); do
-  (( i == CURRENT_IDX )) || STUB_LAYOUTS+=("${LAYOUT_NAMES[$i]}")
+for ((i = 0; i < LAYOUT_COUNT; i++)); do
+  ((i == CURRENT_IDX)) || STUB_LAYOUTS+=("${LAYOUT_NAMES[$i]}")
 done
-if (( ${#STUB_LAYOUTS[@]} > 0 )); then
+if ((${#STUB_LAYOUTS[@]} > 0)); then
   echo
   echo "Stub layouts created for: ${STUB_LAYOUTS[*]}"
   echo "Re-run ~/.config/hypr/scripts/configure while each setup is plugged in to fill them."

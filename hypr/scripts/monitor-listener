@@ -7,7 +7,7 @@ SOCK="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"
 
 ncat -U "$SOCK" | while IFS= read -r event; do
   case "$event" in
-    monitoradded\>\>*|monitorremoved\>\>*|monitoraddedv2\>\>*|monitorremovedv2\>\>*)
+    monitoradded\>\>* | monitorremoved\>\>* | monitoraddedv2\>\>* | monitorremovedv2\>\>*)
       "$HOME/.config/hypr/scripts/location-switch"
       ;;
   esac
