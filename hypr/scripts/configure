@@ -1,0 +1,386 @@
+#!/usr/bin/env bash
+# Interactive layout wizard for hyprland-config.
+# Detects current monitors, asks about layouts/names/workspace splits/markers,
+# writes monitors.<name>.conf, workspaces.<name>.conf, and layouts.sh.
+# Safe to re-run.
+
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/config"
+
+die() { echo "error: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"; }
+
+need hyprctl
+need jq
+
+ALL_JSON=$(hyprctl monitors all -j 2>/dev/null) || die "hyprctl monitors failed. Is Hyprland running?"
+ACTIVE_JSON=$(echo "$ALL_JSON" | jq '[.[] | select(.disabled != true)]')
+ACTIVE_COUNT=$(echo "$ACTIVE_JSON" | jq 'length')
+
+# Route prompts through the controlling TTY when stdin is not interactive
+# (e.g. when called from install.sh running under `curl | bash`).
+if [[ ! -t 0 ]]; then
+  [[ -r /dev/tty ]] || die "no TTY available for prompts"
+  exec </dev/tty
+fi
+
+ask() {
+  local question="$1" default="${2-}" answer
+  if [[ -n "$default" ]]; then
+    read -r -p "$question [$default]: " answer
+    echo "${answer:-$default}"
+  else
+    read -r -p "$question: " answer
+    echo "$answer"
+  fi
+}
+
+ask_yn() {
+  local question="$1" default="${2:-n}" answer
+  while :; do
+    read -r -p "$question [$default]: " answer
+    answer="${answer:-$default}"
+    case "${answer,,}" in
+      y|yes) echo y; return;;
+      n|no)  echo n; return;;
+    esac
+  done
+}
+
+# Recommended workspace split for N monitors.
+dist_for() {
+  case "$1" in
+    1) echo "10";;
+    2) echo "5,5";;
+    3) echo "3,4,3";;
+    4) echo "2,3,3,2";;
+    *)
+      local n=$1 base rem i c out=""
+      base=$((10 / n)); rem=$((10 % n))
+      for ((i=0; i<n; i++)); do
+        c=$base
+        if (( i < rem )); then c=$((c+1)); fi
+        out+=",$c"
+      done
+      echo "${out#,}"
+      ;;
+  esac
+}
+
+validate_dist() {
+  local dist="$1" want="$2"
+  local sum=0 n
+  IFS=',' read -ra parts <<< "$dist"
+  [[ ${#parts[@]} -eq $want ]] || return 1
+  for n in "${parts[@]}"; do
+    [[ "$n" =~ ^[0-9]+$ ]] || return 1
+    sum=$((sum + n))
+  done
+  (( sum == 10 )) || return 1
+}
+
+# ---- intro ----
+echo "============================================================"
+echo "  hyprland-config layout wizard"
+echo "============================================================"
+echo
+echo "Detected $ACTIVE_COUNT active monitor(s):"
+echo
+echo "$ACTIVE_JSON" | jq -r '
+  to_entries[] |
+  "  [\(.key)] \(.value.name)  \(.value.width)x\(.value.height)@\(.value.refreshRate | round)Hz  \(if (.value.description // "") == "" then "(no description)" else .value.description end)"
+'
+echo
+
+# ---- layout count + names ----
+case "$ACTIVE_COUNT" in
+  1) DEFAULT_LAYOUTS=("single");                 DEFAULT_COUNT=1;;
+  2) DEFAULT_LAYOUTS=("home" "single");          DEFAULT_COUNT=2;;
+  *) DEFAULT_LAYOUTS=("home" "work" "single");   DEFAULT_COUNT=3;;
+esac
+
+while :; do
+  LAYOUT_COUNT=$(ask "How many layouts/locations do you want?" "$DEFAULT_COUNT")
+  if [[ "$LAYOUT_COUNT" =~ ^[1-9][0-9]*$ ]]; then break; fi
+  echo "  -> enter a positive integer."
+done
+
+# Sanitize layout names: lowercase letters/digits/_- only. Reject duplicates.
+# If the default has spaces or quoting, it still gets rejected and re-asked.
+LAYOUT_NAMES=()
+for ((i=0; i<LAYOUT_COUNT; i++)); do
+  default="${DEFAULT_LAYOUTS[$i]:-layout$((i+1))}"
+  while :; do
+    name=$(ask "  Layout $((i+1)) name" "$default")
+    if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+      echo "    -> names may contain only letters, digits, '_', '-' (no spaces or punctuation)."
+      continue
+    fi
+    dup=0
+    for existing in "${LAYOUT_NAMES[@]}"; do
+      if [[ "$existing" == "$name" ]]; then dup=1; break; fi
+    done
+    if (( dup == 1 )); then
+      echo "    -> '$name' is already used for an earlier layout. Pick another."
+      continue
+    fi
+    break
+  done
+  LAYOUT_NAMES+=("$name")
+done
+echo
+
+# ---- which layout is the current one? ----
+echo "Which layout matches your CURRENT setup? It will be filled in from detected hardware."
+for ((i=0; i<LAYOUT_COUNT; i++)); do
+  echo "  $((i+1))) ${LAYOUT_NAMES[$i]}"
+done
+while :; do
+  CURRENT_CHOICE=$(ask "  Choice" "1")
+  if [[ "$CURRENT_CHOICE" =~ ^[1-9][0-9]*$ ]] && (( CURRENT_CHOICE >= 1 && CURRENT_CHOICE <= LAYOUT_COUNT )); then
+    break
+  fi
+  echo "    -> enter a number between 1 and $LAYOUT_COUNT."
+done
+CURRENT_IDX=$((CURRENT_CHOICE - 1))
+CURRENT_NAME="${LAYOUT_NAMES[$CURRENT_IDX]}"
+
+# Storage for marker pairs "layout=desc". Fallback layouts get empty desc.
+declare -A MARKERS=()
+
+# ---- per-layout prompts ----
+TMPDIR_WIZARD=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_WIZARD"' EXIT
+
+for ((i=0; i<LAYOUT_COUNT; i++)); do
+  name="${LAYOUT_NAMES[$i]}"
+  echo
+  if (( i == CURRENT_IDX )); then
+    echo "--- '$name' (CURRENT, $ACTIVE_COUNT monitor(s)) ---"
+    mcount=$ACTIVE_COUNT
+    # Write monitors.<name>.conf from detected hardware.
+    {
+      echo "# Auto-generated by ~/.config/hypr/scripts/configure for layout '$name'"
+      echo "# Captured from live setup. Re-run configure to refresh."
+      echo
+      # Include disabled monitors as `disable` lines so the layout is faithful.
+      echo "$ALL_JSON" | jq -r '
+        .[] | if .disabled == true then
+          "monitor=\(.name),disable"
+        else
+          "monitor=" +
+            (if (.description // "") != "" then "desc:" + .description else .name end) +
+            ",\(.width)x\(.height)@\(.refreshRate | round)" +
+            ",\(.x)x\(.y)" +
+            ",\(.scale)"
+        end
+      '
+    } > "$TMPDIR_WIZARD/monitors.$name.conf"
+
+    # Active monitor descriptions in positional order, for workspace assignment.
+    echo "$ACTIVE_JSON" | jq -r 'sort_by(.x, .y) | .[] | (if (.description // "") != "" then "desc:" + .description else .name end)' \
+      > "$TMPDIR_WIZARD/mons.$name.list"
+
+    # Marker default: first active non-eDP monitor with a description.
+    default_marker=$(echo "$ACTIVE_JSON" | jq -r '
+      [.[] | select(.name | startswith("eDP") | not) | select((.description // "") != "") | .description] | .[0] // ""
+    ')
+  else
+    echo "--- '$name' (not currently plugged in) ---"
+    mcount=$(ask "  Total number of monitors in this layout (including laptop display if used)" "1")
+    [[ "$mcount" =~ ^[1-9][0-9]*$ ]] || die "invalid monitor count"
+
+    has_laptop="n"
+    has_edp=0
+    if echo "$ALL_JSON" | jq -e '.[] | select(.name | startswith("eDP"))' >/dev/null 2>&1; then
+      has_edp=1
+    fi
+    if (( has_edp == 1 )) && (( mcount > 1 )); then
+      has_laptop=$(ask_yn "  Include laptop display (eDP-*) in this layout?" "y")
+    elif (( mcount == 1 )) && (( has_edp == 1 )); then
+      has_laptop="y"
+    fi
+
+    externals=$mcount
+    if [[ "$has_laptop" == "y" ]]; then
+      externals=$((mcount - 1))
+    fi
+
+    # Write monitor stub.
+    {
+      printf '%s\n' \
+        "# Stub for layout '$name' - re-run ~/.config/hypr/scripts/configure" \
+        "# while this setup is plugged in to auto-fill it." \
+        "# Find EDID descriptions with:" \
+        "#   hyprctl monitors all -j | jq -r '.[] | \"\\(.name)\\t\\(.description)\"'" \
+        ""
+      for ((j=1; j<=externals; j++)); do
+        echo "monitor=desc:TODO_external_$j,preferred,auto,1.0"
+      done
+      if [[ "$has_laptop" == "y" ]]; then
+        echo "monitor=eDP-1,preferred,auto,1.0"
+      fi
+    } > "$TMPDIR_WIZARD/monitors.$name.conf"
+
+    # Workspace-target list (one entry per monitor).
+    {
+      for ((j=1; j<=externals; j++)); do
+        echo "desc:TODO_external_$j"
+      done
+      if [[ "$has_laptop" == "y" ]]; then
+        echo "eDP-1"
+      fi
+    } > "$TMPDIR_WIZARD/mons.$name.list"
+
+    default_marker=""
+  fi
+
+  # Workspace distribution.
+  default_dist=$(dist_for "$mcount")
+  while :; do
+    dist=$(ask "  Workspace split across $mcount monitor(s) (comma-separated, sum=10)" "$default_dist")
+    if validate_dist "$dist" "$mcount"; then break; fi
+    echo "    -> need $mcount positive integers summing to 10. Try again."
+  done
+
+  # Generate workspaces.<name>.conf from split + monitor-target list.
+  {
+    echo "# Auto-generated by ~/.config/hypr/scripts/configure for layout '$name'"
+    echo
+    mapfile -t targets < "$TMPDIR_WIZARD/mons.$name.list"
+    IFS=',' read -ra parts <<< "$dist"
+    ws=1
+    for ((mi=0; mi<mcount; mi++)); do
+      target="${targets[$mi]}"
+      count=${parts[$mi]}
+      first=1
+      for ((c=0; c<count; c++)); do
+        if (( first == 1 )); then
+          echo "workspace=$ws,monitor:$target,default:true"
+          first=0
+        else
+          echo "workspace=$ws,monitor:$target"
+        fi
+        ws=$((ws + 1))
+      done
+    done
+  } > "$TMPDIR_WIZARD/workspaces.$name.conf"
+
+  # Marker for auto-detection.
+  if (( i == CURRENT_IDX )); then
+    prompt="  Marker (unique EDID description for auto-detect; blank = fallback)"
+    marker=$(ask "$prompt" "$default_marker")
+  else
+    echo "  Marker: an EDID description unique to this layout. Leave blank if this is the fallback"
+    echo "  (typically the laptop-only / 'single' layout)."
+    marker=$(ask "  Marker EDID description" "")
+  fi
+  MARKERS[$name]="$marker"
+done
+
+# Exactly one layout should be fallback (empty marker). Default the CURRENT layout's
+# fallback to "single" if present, otherwise the last one.
+FALLBACK_COUNT=0
+for name in "${LAYOUT_NAMES[@]}"; do
+  if [[ -z "${MARKERS[$name]}" ]]; then
+    FALLBACK_COUNT=$((FALLBACK_COUNT + 1))
+  fi
+done
+if (( FALLBACK_COUNT == 0 )); then
+  echo
+  echo "note: no layout is flagged as fallback. The last-listed layout '${LAYOUT_NAMES[-1]}' will be used"
+  echo "      when no marker matches."
+  MARKERS[${LAYOUT_NAMES[-1]}]=""
+fi
+
+# ---- write config files (with backups) ----
+echo
+echo "Writing configs to $CONFIG_DIR..."
+
+BACKUP_STAMP=$(date +%Y%m%d-%H%M%S)
+BACKUP_DIR="$CONFIG_DIR/.backups/$BACKUP_STAMP"
+BACKUP_INIT=0
+
+safe_write() {
+  local src="$1" dst="$2" rel backup_target
+  if [[ -e "$dst" ]]; then
+    if cmp -s "$src" "$dst"; then
+      return 0
+    fi
+    if (( BACKUP_INIT == 0 )); then
+      mkdir -p "$BACKUP_DIR"
+      echo "  backing up existing files to $BACKUP_DIR"
+      BACKUP_INIT=1
+    fi
+    rel="${dst#"$CONFIG_DIR"/}"
+    backup_target="$BACKUP_DIR/$rel"
+    mkdir -p "$(dirname "$backup_target")"
+    cp -a "$dst" "$backup_target"
+    echo "    backed up $rel"
+  fi
+  install -m 644 "$src" "$dst"
+}
+
+for name in "${LAYOUT_NAMES[@]}"; do
+  safe_write "$TMPDIR_WIZARD/monitors.$name.conf"   "$CONFIG_DIR/monitors.$name.conf"
+  safe_write "$TMPDIR_WIZARD/workspaces.$name.conf" "$CONFIG_DIR/workspaces.$name.conf"
+  echo "  wrote monitors.$name.conf, workspaces.$name.conf"
+done
+
+# ---- generate layouts.sh (detect_location function) ----
+# Order layouts: markered ones first (most-specific monitors first is a sane heuristic,
+# but we keep the user's declared order so they can control precedence). Fallback last.
+{
+  echo "# Auto-generated by ~/.config/hypr/scripts/configure."
+  echo "# Sourced by scripts/location-switch. Re-run configure to regenerate."
+  echo
+  echo "detect_location() {"
+  echo "  local json=\"\$1\""
+  for name in "${LAYOUT_NAMES[@]}"; do
+    marker="${MARKERS[$name]}"
+    if [[ -n "$marker" ]]; then
+      echo "  if echo \"\$json\" | jq -e --arg m ${marker@Q} '.[] | select(.description == \$m)' >/dev/null 2>&1; then"
+      echo "    echo ${name@Q}; return 0"
+      echo "  fi"
+    fi
+  done
+  # Fallback: first layout with empty marker, in declared order.
+  for name in "${LAYOUT_NAMES[@]}"; do
+    if [[ -z "${MARKERS[$name]}" ]]; then
+      echo "  echo ${name@Q}"
+      break
+    fi
+  done
+  echo "}"
+} > "$TMPDIR_WIZARD/layouts.sh"
+safe_write "$TMPDIR_WIZARD/layouts.sh" "$CONFIG_DIR/layouts.sh"
+echo "  wrote layouts.sh"
+
+# ---- point active symlinks at the current layout ----
+ln -sfn "$CONFIG_DIR/monitors.$CURRENT_NAME.conf"   "$CONFIG_DIR/monitors.conf"
+ln -sfn "$CONFIG_DIR/workspaces.$CURRENT_NAME.conf" "$CONFIG_DIR/workspaces.conf"
+echo
+echo "Linked current layout:"
+echo "  monitors.conf   -> monitors.$CURRENT_NAME.conf"
+echo "  workspaces.conf -> workspaces.$CURRENT_NAME.conf"
+
+# ---- reload ----
+if pgrep -x Hyprland >/dev/null; then
+  echo
+  echo "Reloading Hyprland..."
+  hyprctl reload >/dev/null || true
+fi
+
+# ---- summary ----
+echo
+echo "Done."
+STUB_LAYOUTS=()
+for ((i=0; i<LAYOUT_COUNT; i++)); do
+  (( i == CURRENT_IDX )) || STUB_LAYOUTS+=("${LAYOUT_NAMES[$i]}")
+done
+if (( ${#STUB_LAYOUTS[@]} > 0 )); then
+  echo
+  echo "Stub layouts created for: ${STUB_LAYOUTS[*]}"
+  echo "Re-run ~/.config/hypr/scripts/configure while each setup is plugged in to fill them."
+fi

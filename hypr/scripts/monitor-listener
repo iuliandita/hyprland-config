@@ -1,0 +1,14 @@
+#!/usr/bin/bash
+# Reacts to Hyprland monitor hotplug events and runs location-switch.
+# Listens on Hyprland's socket2 IPC so dock/undock retriggers the config symlink.
+
+SOCK="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"
+[[ -S "$SOCK" ]] || exit 1
+
+ncat -U "$SOCK" | while IFS= read -r event; do
+  case "$event" in
+    monitoradded\>\>*|monitorremoved\>\>*|monitoraddedv2\>\>*|monitorremovedv2\>\>*)
+      "$HOME/.config/hypr/scripts/location-switch"
+      ;;
+  esac
+done

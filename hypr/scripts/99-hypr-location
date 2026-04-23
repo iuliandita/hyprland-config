@@ -1,0 +1,25 @@
+#!/usr/bin/bash
+# NetworkManager dispatcher script for Hyprland location switching.
+# Install to /etc/NetworkManager/dispatcher.d/99-hypr-location.
+#
+# NetworkManager passes ($1 interface, $2 status). We only use status.
+
+STATUS="$2"
+[[ "$STATUS" != "up" ]] && exit 0
+
+LOGGED_USER=$(who | grep -m1 'tty\|:0' | awk '{print $1}')
+[[ -z "$LOGGED_USER" ]] && exit 0
+
+USER_HOME=$(getent passwd "$LOGGED_USER" | cut -d: -f6)
+[[ -z "$USER_HOME" ]] && exit 0
+
+# Resolve Hyprland's instance signature. Prefer the recorded marker; fall back to
+# the first directory under /tmp/hypr. find-printf is used instead of `ls` so the
+# output doesn't depend on locale / non-alphanumeric directory names.
+HIS=$(cat /tmp/hypr/.hyprland_instance 2>/dev/null || \
+      find /tmp/hypr -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | head -n1)
+
+sudo -u "$LOGGED_USER" \
+    HYPRLAND_INSTANCE_SIGNATURE="$HIS" \
+    XDG_RUNTIME_DIR="/run/user/$(id -u "$LOGGED_USER")" \
+    "$USER_HOME/.config/hypr/scripts/location-switch" &

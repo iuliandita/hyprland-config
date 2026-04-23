@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+tmpfile="$(mktemp --suffix=.png /tmp/swappy-shot-XXXXXX)"
+cleanup() {
+  rm -f "$tmpfile"
+}
+trap cleanup EXIT
+
+geometry="${SCREENSHOT_GEOMETRY:-}"
+if [[ -z "$geometry" ]]; then
+  geometry="$(slurp)" || exit 0
+fi
+
+grim -g "$geometry" "$tmpfile"
+swappy -f "$tmpfile"

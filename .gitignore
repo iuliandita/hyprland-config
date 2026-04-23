@@ -1,0 +1,14 @@
+# Runtime-generated symlinks (managed by location-switch)
+hypr/config/monitors.conf
+hypr/config/workspaces.conf
+
+# AI agent state / guidance - local only
+.claude/
+CLAUDE.md
+AGENTS.md
+
+# Editor / OS junk
+*.bak
+*.swp
+*~
+.DS_Store

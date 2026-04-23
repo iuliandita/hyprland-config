@@ -1,0 +1,78 @@
+#!/usr/bin/bash
+# Detects current layout via config/layouts.sh and flips monitors.conf /
+# workspaces.conf symlinks to match. Reloads Hyprland when the layout changes.
+
+CONFIG_DIR="$HOME/.config/hypr/config"
+DELAY=1.5 # seconds to let monitors settle before reloading
+
+# shellcheck source=/dev/null
+. "$CONFIG_DIR/layouts.sh"
+
+JSON=$(hyprctl monitors all -j 2>/dev/null || echo '[]')
+CURRENT_LOCATION=$(detect_location "$JSON")
+
+# Only update symlinks if the target layout's files exist.
+if [[ ! -f "$CONFIG_DIR/monitors.$CURRENT_LOCATION.conf" ]]; then
+  echo "location-switch: no config for layout '$CURRENT_LOCATION'" >&2
+  exit 1
+fi
+
+NEEDS_UPDATE=0
+if [[ -L "$CONFIG_DIR/monitors.conf" ]]; then
+  CURRENT_TARGET=$(readlink "$CONFIG_DIR/monitors.conf")
+  if [[ "$CURRENT_TARGET" != "$CONFIG_DIR/monitors.$CURRENT_LOCATION.conf" ]]; then
+    NEEDS_UPDATE=1
+  fi
+else
+  NEEDS_UPDATE=1
+fi
+
+if [[ $NEEDS_UPDATE -eq 1 ]]; then
+  ln -sfn "$CONFIG_DIR/monitors.$CURRENT_LOCATION.conf"   "$CONFIG_DIR/monitors.conf"
+  ln -sfn "$CONFIG_DIR/workspaces.$CURRENT_LOCATION.conf" "$CONFIG_DIR/workspaces.conf"
+
+  if pgrep -x Hyprland >/dev/null; then
+    sleep "$DELAY"
+    hyprctl reload
+    sleep 0.5
+
+    # Parse the new workspaces.<layout>.conf for pin assignments.
+    # Format: workspace=<id>,monitor:<target>[,default:true]
+    # <target> may contain commas-free strings like "desc:Dell Inc. DELL G2725D 4545S34".
+    WS_FILE="$CONFIG_DIR/workspaces.$CURRENT_LOCATION.conf"
+    declare -A PINNED_MONITOR
+    declare -a DEFAULTS
+
+    while IFS= read -r line; do
+      [[ "$line" =~ ^workspace=([0-9]+),monitor:(.+)$ ]] || continue
+      id="${BASH_REMATCH[1]}"
+      rest="${BASH_REMATCH[2]}"
+      is_default=0
+      if [[ "$rest" == *",default:true" ]]; then
+        rest="${rest%,default:true}"
+        is_default=1
+      fi
+      PINNED_MONITOR[$id]="$rest"
+      [[ $is_default -eq 1 ]] && DEFAULTS+=("$rest::$id")
+    done < "$WS_FILE"
+
+    # 1. Force-migrate existing workspaces to their pinned monitor (windows travel with them).
+    #    Idempotent when already correct; empty stragglers not in the new config are left
+    #    in place and Hyprland garbage-collects them on focus change.
+    while read -r ws; do
+      target="${PINNED_MONITOR[$ws]:-}"
+      [[ -n "$target" ]] || continue
+      hyprctl dispatch moveworkspacetomonitor "$ws" "$target" >/dev/null 2>&1 || true
+    done < <(hyprctl workspaces -j | jq -r '.[].id')
+
+    # 2. Switch each monitor to its default workspace.
+    for entry in "${DEFAULTS[@]}"; do
+      target="${entry%::*}"
+      ws="${entry##*::}"
+      hyprctl dispatch focusmonitor "$target" >/dev/null 2>&1 || true
+      hyprctl dispatch workspace "$ws" >/dev/null 2>&1 || true
+    done
+  fi
+
+  notify-send "Hyprland" "Switched to $CURRENT_LOCATION configuration" 2>/dev/null || true
+fi
