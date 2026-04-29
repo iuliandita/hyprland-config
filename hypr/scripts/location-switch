@@ -72,6 +72,11 @@ if [[ $NEEDS_UPDATE -eq 1 ]]; then
       hyprctl dispatch focusmonitor "$target" > /dev/null 2>&1 || true
       hyprctl dispatch workspace "$ws" > /dev/null 2>&1 || true
     done
+
+    # 3. Resync waybar. Its hyprland/workspaces module can miss destroyworkspace
+    #    events during the reload+dispatch burst above, leaving stale workspaces
+    #    in the bar even after Hyprland has GC'd them.
+    pkill -SIGUSR2 waybar 2> /dev/null || true
   fi
 
   notify-send "Hyprland" "Switched to $CURRENT_LOCATION configuration" 2> /dev/null || true
