@@ -5,6 +5,14 @@
 SOCK="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"
 [[ -S "$SOCK" ]] || exit 1
 
+# Catch monitors that were already present when Hyprland started: those produce
+# no monitoradded events for this listener. The exec-once location-switch in
+# autostart.conf also covers this, but only one of them needs to win.
+(
+  sleep 2
+  "$HOME/.config/hypr/scripts/location-switch"
+) &
+
 ncat -U "$SOCK" | while IFS= read -r event; do
   case "$event" in
     monitoradded\>\>* | monitorremoved\>\>* | monitoraddedv2\>\>* | monitorremovedv2\>\>*)
