@@ -8,7 +8,7 @@ DELAY=1.5 # seconds to let monitors settle before reloading
 # shellcheck source=/dev/null
 . "$CONFIG_DIR/layouts.sh"
 
-JSON=$(hyprctl monitors all -j 2> /dev/null || echo '[]')
+JSON=$(hyprctl monitors -j 2> /dev/null || echo '[]')
 CURRENT_LOCATION=$(detect_location "$JSON")
 
 # Only update symlinks if the target layout's files exist.
@@ -38,7 +38,7 @@ if [[ $NEEDS_UPDATE -eq 1 ]]; then
 
     # Parse the new workspaces.<layout>.conf for pin assignments.
     # Format: workspace=<id>,monitor:<target>[,default:true]
-    # <target> may contain commas-free strings like "desc:Dell Inc. DELL G2725D 4545S34".
+    # <target> may contain commas-free strings like "desc:Dell Inc. DELL G2725D <serial>".
     WS_FILE="$CONFIG_DIR/workspaces.$CURRENT_LOCATION.conf"
     declare -A PINNED_MONITOR
     declare -a DEFAULTS
