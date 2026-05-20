@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Force any connected Bluetooth headset into HFP (call) mode, or back to A2DP.
+# Usage:
+#   bt-call-mode          -> toggle between A2DP and HFP
+#   bt-call-mode call     -> force HFP (mic + speaker)
+#   bt-call-mode music    -> force A2DP (stereo, no mic)
+set -euo pipefail
+
+card=$(pactl list cards short | awk '/bluez_card/ {print $2; exit}')
+if [[ -z "${card:-}" ]]; then
+  notify-send -u critical "BT call mode" "No Bluetooth audio device connected"
+  exit 1
+fi
+
+current=$(pactl list cards | awk -v c="$card" '
+  $0 ~ "Name: " c {found=1}
+  found && /Active Profile:/ {print $3; exit}
+')
+
+# Pick the best HFP profile this card actually offers, preferring mSBC.
+hfp_profile=$(pactl list cards | awk -v c="$card" '
+  $0 ~ "Name: " c {found=1}
+  found && /^[[:space:]]+headset-head-unit-msbc:/ {print "headset-head-unit-msbc"; exit}
+  found && /^[[:space:]]+headset-head-unit-cvsd:/ {fallback="headset-head-unit-cvsd"}
+  found && /^[[:space:]]+headset-head-unit:/ {fallback2="headset-head-unit"}
+  END {if (fallback) print fallback; else if (fallback2) print fallback2}
+')
+
+a2dp_profile=$(pactl list cards | awk -v c="$card" '
+  $0 ~ "Name: " c {found=1}
+  found && /^[[:space:]]+a2dp-sink-aptx_hd:/ {print "a2dp-sink-aptx_hd"; exit}
+  found && /^[[:space:]]+a2dp-sink-aptx:/    {fallback1="a2dp-sink-aptx"}
+  found && /^[[:space:]]+a2dp-sink-sbc_xq:/  {fallback2="a2dp-sink-sbc_xq"}
+  found && /^[[:space:]]+a2dp-sink:/         {fallback3="a2dp-sink"}
+  END {
+    if (fallback1) print fallback1;
+    else if (fallback2) print fallback2;
+    else if (fallback3) print fallback3
+  }
+')
+
+target="${1:-toggle}"
+case "$target" in
+  call) profile="$hfp_profile" ;;
+  music) profile="$a2dp_profile" ;;
+  toggle)
+    if [[ "$current" == headset-head-unit* ]]; then
+      profile="$a2dp_profile"
+    else
+      profile="$hfp_profile"
+    fi
+    ;;
+  *)
+    echo "usage: $0 [call|music|toggle]"
+    exit 2
+    ;;
+esac
+
+if [[ -z "${profile:-}" ]]; then
+  notify-send -u critical "BT call mode" "No suitable profile on $card"
+  exit 1
+fi
+
+pactl set-card-profile "$card" "$profile"
+notify-send "BT: $profile" "card: $card"

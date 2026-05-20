@@ -333,6 +333,38 @@ if [[ ! -e "$DEST/config/workspaces.conf" ]]; then
   echo "==> seeded workspaces.conf -> workspaces.single.conf"
 fi
 
+# ---- systemd user units ----
+# Optional: install + enable user services that complement Hyprland.
+# Currently:
+#   hypr-dpms-on-session-active.service - forces hyprctl dispatch dpms on when
+#     logind reports the graphical session went inactive -> active, covering
+#     long-idle + VT-switch cases where hypridle's input-driven on-resume
+#     doesn't fire (monitors stay dark, notifications still play audio).
+if [[ -d "$SRC/../systemd/user" ]] && command -v systemctl > /dev/null 2>&1; then
+  USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  mkdir -p "$USER_UNIT_DIR"
+  for unit in "$SRC"/../systemd/user/*.service; do
+    [[ -f "$unit" ]] || continue
+    name=$(basename "$unit")
+    safe_install 644 "$unit" "$USER_UNIT_DIR/$name"
+  done
+  if systemctl --user daemon-reload > /dev/null 2>&1; then
+    for unit in "$SRC"/../systemd/user/*.service; do
+      [[ -f "$unit" ]] || continue
+      name=$(basename "$unit")
+      if ! systemctl --user is-enabled "$name" > /dev/null 2>&1; then
+        if systemctl --user enable --now "$name" > /dev/null 2>&1; then
+          echo "==> enabled user service: $name"
+        else
+          echo "    (could not enable $name; enable manually with: systemctl --user enable --now $name)"
+        fi
+      fi
+    done
+  else
+    echo "    (systemctl --user not usable here; user units copied but not enabled)"
+  fi
+fi
+
 # ---- wizard ----
 can_wizard() {
   [[ -r /dev/tty ]] || return 1

@@ -179,7 +179,7 @@ If you'd rather hand-edit:
 
 - `config/monitors.<layout>.conf` - one `monitor=` line per output
 - `config/workspaces.<layout>.conf` - `workspace=N,monitor:desc:<EDID>` per slot
-- `config/layouts.sh` - `detect_location()` bash function; gets `hyprctl monitors all -j` output as `$1`, echoes a layout name
+- `config/layouts.sh` - `detect_location()` bash function; gets `hyprctl monitors -j` output as `$1`, echoes a layout name
 
 Prefer `desc:<EDID description>` over `DP-N` port names. DisplayPort numbers shuffle across reboots, dock cycles, and cable order; EDID descriptions are stable. Find them with:
 
@@ -217,17 +217,23 @@ hypr/
 │   ├── windowrules.conf
 │   └── workspaces.single.conf # Wizard creates workspaces.<layout>.conf for other layouts
 └── scripts/
-    ├── configure              # Interactive layout wizard
-    ├── location-switch        # Detect + flip symlinks + reload
-    ├── monitor-listener       # Hyprland IPC -> location-switch
-    ├── 99-hypr-location       # NetworkManager dispatcher (optional)
-    ├── screenshot             # grim + slurp
+    ├── configure                # Interactive layout wizard
+    ├── location-switch          # Detect + flip symlinks + reload
+    ├── monitor-listener         # Hyprland IPC -> location-switch
+    ├── 99-hypr-location         # NetworkManager dispatcher (optional)
+    ├── dpms-on-session-active   # logind D-Bus -> hyprctl dispatch dpms on
+    ├── bt-call-mode             # Toggle Bluetooth headset HFP <-> A2DP
+    ├── screenshot               # grim + slurp
     ├── screenshot_area
     ├── screenshot_full
     └── screenshot_swappy
+
+systemd/
+└── user/
+    └── hypr-dpms-on-session-active.service   # Wraps scripts/dpms-on-session-active
 ```
 
-`monitors.conf` and `workspaces.conf` are runtime-generated symlinks. They are not in the repo; `install.sh` creates them on first run.
+`monitors.conf` and `workspaces.conf` are runtime-generated symlinks. They are not in the repo; `install.sh` creates them on first run. `install.sh` also copies the `systemd/user/*.service` units to `~/.config/systemd/user/` and `enable --now`s them when `systemctl --user` is usable.
 
 ## Dependencies
 
@@ -254,4 +260,5 @@ No real Hyprland required - everything is mocked. Pass `--skip-deps` to `install
 
 - Windows stay with their workspace across dock transitions. Unplug -> all 10 workspaces land on the laptop; replug -> workspaces re-home to their assigned monitors. Tiled layouts re-tile automatically. Floating windows keep absolute coords and may land oddly; nudge them.
 - `swaylock` / `swaylock-effects` is incompatible with Hyprland 0.40+ (no `ext-session-lock-v1`). Stick with `hyprlock`.
+- `hypr-dpms-on-session-active.service` watches logind for the graphical session flipping inactive -> active (VT switch back, resume from suspend, lid open) and dispatches `hyprctl dispatch dpms on`. `hypridle`'s own `on-resume` only fires on Wayland input events, so a long idle followed by a VT switch can otherwise leave the compositor stuck in `dpms off`. Disable with `systemctl --user disable --now hypr-dpms-on-session-active.service` if you don't want it.
 - The `location-switch` idempotency guard compares symlink targets, so repeated firing while already in the right state is a no-op.

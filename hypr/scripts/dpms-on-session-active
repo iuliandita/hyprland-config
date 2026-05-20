@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Forces "hyprctl dispatch dpms on" when the logind graphical session
+# transitions inactive -> active (VT switch back, resume from suspend,
+# lid open).
+#
+# Why this exists: hypridle's on-resume only fires on Wayland input
+# events, so a long idle + VT switch leaves the compositor stuck in
+# dpms-off with no trigger to recover. logind owns the real
+# session-active signal, so we listen there.
+
+set -euo pipefail
+
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+log() { printf '[dpms-on-session-active] %s\n' "$*" >&2; }
+
+find_graphical_session_path() {
+  local s type path
+  while read -r s; do
+    type=$(loginctl show-session "$s" -p Type --value 2> /dev/null || true)
+    [[ "$type" == "wayland" || "$type" == "x11" ]] || continue
+    path=$(busctl --system call org.freedesktop.login1 /org/freedesktop/login1 \
+      org.freedesktop.login1.Manager GetSession s "$s" 2> /dev/null |
+      awk '{gsub(/"/, "", $2); print $2}')
+    if [[ -n "$path" ]]; then
+      echo "$path"
+      return 0
+    fi
+  done < <(loginctl list-sessions --no-legend | awk -v u="$USER" '$3==u {print $1}')
+  return 1
+}
+
+wake_hypr() {
+  local sig
+  # shellcheck disable=SC2012  # ls -t for newest entry; Hyprland instance signatures are hex, no non-alphanumeric concern.
+  sig=$(ls -t "$XDG_RUNTIME_DIR/hypr" 2> /dev/null | head -1) || return 0
+  [[ -n "$sig" ]] || return 0
+  HYPRLAND_INSTANCE_SIGNATURE="$sig" hyprctl dispatch dpms on > /dev/null 2>&1 || true
+}
+
+main() {
+  local path
+  if ! path=$(find_graphical_session_path); then
+    log "no graphical session for $USER; will retry"
+    # Loop until a graphical session appears (covers boot-before-login).
+    while ! path=$(find_graphical_session_path); do sleep 5; done
+  fi
+  log "watching $path"
+
+  local prev_active new_active
+  prev_active=$(busctl --system get-property org.freedesktop.login1 "$path" \
+    org.freedesktop.login1.Session Active 2> /dev/null |
+    awk '{print $2}')
+  log "initial Active=$prev_active"
+
+  # gdbus monitor lines look like:
+  #   /org/freedesktop/login1/session/_33: org.freedesktop.DBus.Properties.PropertiesChanged ('org.freedesktop.login1.Session', {'Active': <true>}, @as [])
+  gdbus monitor --system --dest org.freedesktop.login1 --object-path "$path" |
+    while IFS= read -r line; do
+      case "$line" in
+        *"'Active'"*"<true>"*) new_active="true" ;;
+        *"'Active'"*"<false>"*) new_active="false" ;;
+        *) continue ;;
+      esac
+
+      if [[ "$prev_active" == "false" && "$new_active" == "true" ]]; then
+        log "session became active -> dpms on"
+        wake_hypr
+      fi
+      prev_active="$new_active"
+    done
+}
+
+main "$@"

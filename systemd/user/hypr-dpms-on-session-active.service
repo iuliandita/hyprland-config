@@ -1,0 +1,15 @@
+[Unit]
+Description=Force Hyprland DPMS on when logind session becomes active
+Documentation=man:hypridle(1) https://wiki.hyprland.org/
+
+# logind D-Bus is always up by the time the user manager runs, and the
+# script tolerates Hyprland not being ready yet, so no hard After= needed.
+
+[Service]
+Type=simple
+ExecStart=%h/.config/hypr/scripts/dpms-on-session-active
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
