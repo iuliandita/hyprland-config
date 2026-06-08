@@ -35,7 +35,21 @@ wake_hypr() {
   # shellcheck disable=SC2012  # ls -t for newest entry; Hyprland instance signatures are hex, no non-alphanumeric concern.
   sig=$(ls -t "$XDG_RUNTIME_DIR/hypr" 2> /dev/null | head -1) || return 0
   [[ -n "$sig" ]] || return 0
-  HYPRLAND_INSTANCE_SIGNATURE="$sig" hyprctl dispatch dpms on > /dev/null 2>&1 || true
+  export HYPRLAND_INSTANCE_SIGNATURE="$sig"
+  # The logind Active=true edge can precede Hyprland's DRM-resume completion on
+  # VT switch-in: Hyprland reacquires the DRM master and replays its resume
+  # (rechecks connectors, reassigns CRTCs), re-committing the prior monitor
+  # power state. A single dispatch landing mid-resume gets clobbered back to off.
+  # So dispatch + verify dpmsStatus, retrying until all monitors report on
+  # (~4s timeout). dpms on is idempotent, so repeated dispatches are harmless.
+  for _ in $(seq 1 12); do
+    hyprctl dispatch dpms on > /dev/null 2>&1 || true
+    if hyprctl monitors -j 2> /dev/null | jq -e 'length > 0 and all(.[]; .dpmsStatus == true)' > /dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.35
+  done
+  log "warning: monitors still report dpms off after retries"
 }
 
 main() {
