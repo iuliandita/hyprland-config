@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Forces "hyprctl dispatch dpms on" when the logind graphical session
-# transitions inactive -> active (VT switch back, resume from suspend,
+# Forces "hyprctl dispatch dpms on" when a logind graphical session for this
+# user transitions inactive -> active (VT switch back, resume from suspend,
 # lid open).
 #
 # Why this exists: hypridle's on-resume only fires on Wayland input
@@ -30,6 +30,26 @@ find_graphical_session_path() {
   return 1
 }
 
+session_active() {
+  local path="$1"
+  busctl --system get-property org.freedesktop.login1 "$path" \
+    org.freedesktop.login1.Session Active 2> /dev/null |
+    awk '{print $2}'
+}
+
+is_own_graphical_session() {
+  local path="$1" uid type
+  uid=$(busctl --system get-property org.freedesktop.login1 "$path" \
+    org.freedesktop.login1.Session User 2> /dev/null |
+    awk '{print $2}') || return 1
+  [[ "$uid" == "$(id -u)" ]] || return 1
+
+  type=$(busctl --system get-property org.freedesktop.login1 "$path" \
+    org.freedesktop.login1.Session Type 2> /dev/null |
+    awk -F'"' '{print $2}') || return 1
+  [[ "$type" == "wayland" || "$type" == "x11" ]]
+}
+
 wake_hypr() {
   local sig
   # shellcheck disable=SC2012  # ls -t for newest entry; Hyprland instance signatures are hex, no non-alphanumeric concern.
@@ -53,35 +73,35 @@ wake_hypr() {
 }
 
 main() {
-  local path
-  if ! path=$(find_graphical_session_path); then
-    log "no graphical session for $USER; will retry"
-    # Loop until a graphical session appears (covers boot-before-login).
-    while ! path=$(find_graphical_session_path); do sleep 5; done
-  fi
-  log "watching $path"
+  local path active
+  declare -A prev_active_by_path=()
 
-  local prev_active new_active
-  prev_active=$(busctl --system get-property org.freedesktop.login1 "$path" \
-    org.freedesktop.login1.Session Active 2> /dev/null |
-    awk '{print $2}')
-  log "initial Active=$prev_active"
+  if path=$(find_graphical_session_path); then
+    active=$(session_active "$path" || true)
+    [[ -n "$active" ]] && prev_active_by_path["$path"]="$active"
+    log "watching login1 sessions; initial graphical session $path Active=${active:-unknown}"
+  else
+    log "watching login1 sessions; no graphical session for $USER yet"
+  fi
 
   # gdbus monitor lines look like:
   #   /org/freedesktop/login1/session/_33: org.freedesktop.DBus.Properties.PropertiesChanged ('org.freedesktop.login1.Session', {'Active': <true>}, @as [])
-  gdbus monitor --system --dest org.freedesktop.login1 --object-path "$path" |
+  gdbus monitor --system --dest org.freedesktop.login1 |
     while IFS= read -r line; do
       case "$line" in
-        *"'Active'"*"<true>"*) new_active="true" ;;
-        *"'Active'"*"<false>"*) new_active="false" ;;
+        /org/freedesktop/login1/session/*:*"'Active'"*"<true>"*) active="true" ;;
+        /org/freedesktop/login1/session/*:*"'Active'"*"<false>"*) active="false" ;;
         *) continue ;;
       esac
 
-      if [[ "$prev_active" == "false" && "$new_active" == "true" ]]; then
-        log "session became active -> dpms on"
+      path="${line%%:*}"
+      is_own_graphical_session "$path" || continue
+
+      if [[ "${prev_active_by_path[$path]:-false}" == "false" && "$active" == "true" ]]; then
+        log "session $path became active -> dpms on"
         wake_hypr
       fi
-      prev_active="$new_active"
+      prev_active_by_path["$path"]="$active"
     done
 }
 
