@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+# Forces "hyprctl dispatch dpms on" when real input arrives after an idle gap,
+# independent of the compositor's idle-notify subsystem.
+#
+# Why this exists (companion to dpms-on-session-active):
+#   hypridle blanks the monitors with `hyprctl dispatch dpms off` at 10 min.
+#   Recovery is supposed to come from hypridle's `on-resume`, which rides the
+#   ext-idle-notify Wayland protocol. On this machine aquamarine intermittently
+#   misfires that protocol ("dispatchIdle: non readable idle event on fd"), so
+#   on-resume can silently fail to fire. On DisplayPort the link also physically
+#   drops after a few minutes of DPMS-off and the output is seen as
+#   disconnected, so a later `dpms on` can no-op. The result is monitors stuck
+#   dark after a plain input-wake -- which produces NO logind session Active
+#   edge, so dpms-on-session-active cannot catch it either.
+#
+#   This watchdog reads evdev directly from the kernel: it sees the waking
+#   keypress / mouse move before and independent of the compositor's idle
+#   bookkeeping, and forces the monitors back on, escalating to `hyprctl reload`
+#   when a dropped DP link needs a full reconfigure rather than just dpms-on.
+#
+# Requires read access to /dev/input/event* (the `input` group). Takes effect in
+# the systemd user manager after the next login following `usermod -aG input`.
+
+import json
+import os
+import selectors
+import struct
+import subprocess
+import sys
+import time
+
+# struct input_event on 64-bit Linux: struct timeval (2x long) + type + code + value
+EVENT_FORMAT = "llHHi"
+EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
+
+# Event types we treat as real user activity (linux/input-event-codes.h).
+EV_KEY = 0x01  # keyboard / mouse buttons
+EV_REL = 0x02  # mouse movement / wheel
+EV_ABS = 0x03  # touchpad / touchscreen
+ACTIVITY_TYPES = frozenset((EV_KEY, EV_REL, EV_ABS))
+
+INPUT_DIR = "/dev/input"
+# Only act when the gap since the previous input suggests we are returning from
+# idle. A 600s dpms-off always produces a gap far larger than this; during
+# active use gaps are tiny, so we never touch hyprctl.
+IDLE_GAP = 3.0
+# Re-scan for hot-plugged input devices on each idle select() timeout.
+RESCAN_INTERVAL = 60.0
+
+
+def log(msg):
+    print(f"[dpms-on-input-active] {msg}", file=sys.stderr, flush=True)
+
+
+def runtime_dir():
+    return os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+
+
+def hypr_signature():
+    """Newest Hyprland instance signature dir, mirroring `ls -t | head -1`."""
+    base = os.path.join(runtime_dir(), "hypr")
+    try:
+        entries = [
+            (e.stat().st_mtime, e.name)
+            for e in os.scandir(base)
+            if e.is_dir()
+        ]
+    except OSError:
+        return None
+    if not entries:
+        return None
+    entries.sort(reverse=True)
+    return entries[0][1]
+
+
+def hyprctl(args, sig, timeout=4.0):
+    env = dict(os.environ, HYPRLAND_INSTANCE_SIGNATURE=sig)
+    try:
+        return subprocess.run(
+            ["hyprctl", *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log(f"hyprctl {' '.join(args)} failed: {exc}")
+        return None
+
+
+def monitors_all_on(sig):
+    """True if all monitors report dpms on, False if any is off, None on error."""
+    proc = hyprctl(["-j", "monitors"], sig)
+    if proc is None or proc.returncode != 0:
+        return None
+    try:
+        monitors = json.loads(proc.stdout)
+    except (ValueError, TypeError):
+        return None
+    if not monitors:
+        return None
+    return all(m.get("dpmsStatus") for m in monitors)
+
+
+def ensure_dpms_on(idle_gap):
+    sig = hypr_signature()
+    if not sig:
+        return
+
+    state = monitors_all_on(sig)
+    if state is not False:
+        # Already on (True) or unknown (None) -- nothing reliable to do.
+        return
+
+    log(f"input after {idle_gap:.0f}s idle; monitors report dpms off -> forcing on")
+
+    # A single dispatch landing mid DRM-resume can get clobbered back to off, so
+    # dispatch + verify, retrying for ~4s. `dpms on` is idempotent.
+    for _ in range(12):
+        hyprctl(["dispatch", "dpms", "on"], sig)
+        if monitors_all_on(sig):
+            log("recovered via dpms on")
+            return
+        time.sleep(0.35)
+
+    # Still dark: most likely a DisplayPort link that dropped during the blank
+    # and is now seen as disconnected. dpms-on cannot re-add a gone connector;
+    # a config reload re-applies monitor rules and re-enables the output.
+    log("dpms on insufficient (likely dropped DP link) -> hyprctl reload")
+    hyprctl(["reload"], sig, timeout=8.0)
+    time.sleep(1.5)
+    for _ in range(8):
+        if monitors_all_on(sig):
+            log("recovered via reload")
+            return
+        hyprctl(["dispatch", "dpms", "on"], sig)
+        time.sleep(0.35)
+
+    log("warning: monitors still report dpms off after dpms-on + reload")
+
+
+def open_devices(sel, known):
+    """Register any readable /dev/input/event* not already watched."""
+    try:
+        names = os.listdir(INPUT_DIR)
+    except OSError as exc:
+        log(f"cannot list {INPUT_DIR}: {exc}")
+        return
+    for name in names:
+        if not name.startswith("event"):
+            continue
+        path = os.path.join(INPUT_DIR, name)
+        if path in known:
+            continue
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except PermissionError:
+            # Not in the `input` group yet (e.g. pre-relogin). Fail loud once.
+            if path not in known:
+                log(f"permission denied opening {path} (need 'input' group)")
+            known[path] = None
+            continue
+        except OSError as exc:
+            log(f"cannot open {path}: {exc}")
+            known[path] = None
+            continue
+        known[path] = fd
+        sel.register(fd, selectors.EVENT_READ, path)
+
+
+def drain_has_activity(fd):
+    """Read all pending events from fd; return True if any is real input."""
+    activity = False
+    while True:
+        try:
+            data = os.read(fd, EVENT_SIZE * 64)
+        except BlockingIOError:
+            break
+        except OSError:
+            # Device vanished (unplug). Signal removal to caller.
+            raise
+        if not data:
+            break
+        for off in range(0, len(data) - EVENT_SIZE + 1, EVENT_SIZE):
+            _, _, etype, _, _ = struct.unpack_from(EVENT_FORMAT, data, off)
+            if etype in ACTIVITY_TYPES:
+                activity = True
+        if len(data) < EVENT_SIZE * 64:
+            break
+    return activity
+
+
+def main():
+    sel = selectors.DefaultSelector()
+    known = {}  # path -> fd (or None if unopenable)
+    open_devices(sel, known)
+    if not any(fd is not None for fd in known.values()):
+        log("no readable input devices; is this user in the 'input' group?")
+
+    log("watching input devices for idle-wake DPMS recovery")
+    last_input = time.monotonic()
+
+    while True:
+        events = sel.select(timeout=RESCAN_INTERVAL)
+        if not events:
+            open_devices(sel, known)  # catch hot-plugged devices
+            continue
+
+        activity = False
+        for key, _mask in events:
+            fd = key.fileobj
+            try:
+                if drain_has_activity(fd):
+                    activity = True
+            except OSError:
+                sel.unregister(fd)
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                known.pop(key.data, None)
+
+        if not activity:
+            continue
+
+        now = time.monotonic()
+        gap = now - last_input
+        last_input = now
+        if gap >= IDLE_GAP:
+            ensure_dpms_on(gap)
+            last_input = time.monotonic()  # discount slow recovery work
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

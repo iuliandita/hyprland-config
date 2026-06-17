@@ -340,6 +340,10 @@ fi
 #     logind reports the graphical session went inactive -> active, covering
 #     long-idle + VT-switch cases where hypridle's input-driven on-resume
 #     doesn't fire (monitors stay dark, notifications still play audio).
+#   hypr-dpms-on-input-active.service - reads /dev/input directly and forces
+#     dpms on when input resumes after idle, covering plain input-wakes (no
+#     logind edge) where hypridle's on-resume misfires or a DisplayPort link
+#     dropped during the blank. Needs the user in the `input` group.
 if [[ -d "$SRC/../systemd/user" ]] && command -v systemctl > /dev/null 2>&1; then
   USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
   mkdir -p "$USER_UNIT_DIR"
@@ -362,6 +366,14 @@ if [[ -d "$SRC/../systemd/user" ]] && command -v systemctl > /dev/null 2>&1; the
     done
   else
     echo "    (systemctl --user not usable here; user units copied but not enabled)"
+  fi
+
+  # hypr-dpms-on-input-active reads /dev/input/event* (mode 660, group input).
+  # Group membership is only picked up by the user manager after a re-login, so
+  # we cannot fix it here; just tell the user (matches the NM-dispatcher style).
+  if ! id -nG | tr ' ' '\n' | grep -qx input; then
+    echo "    note: add yourself to the 'input' group for hypr-dpms-on-input-active:"
+    echo "          sudo usermod -aG input $USER   # then log out and back in"
   fi
 fi
 

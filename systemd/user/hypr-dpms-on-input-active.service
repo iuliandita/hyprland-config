@@ -1,0 +1,16 @@
+[Unit]
+Description=Force Hyprland DPMS on when input resumes after idle (idle-notify / DP-drop recovery)
+Documentation=man:hypridle(1) https://wiki.hyprland.org/
+
+# Reads /dev/input directly and tolerates Hyprland not being ready yet, so no
+# hard ordering is needed. Requires the user to be in the `input` group; group
+# membership is picked up by the user manager on the next login.
+
+[Service]
+Type=simple
+ExecStart=%h/.config/hypr/scripts/dpms-on-input-active
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

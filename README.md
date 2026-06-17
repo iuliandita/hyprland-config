@@ -222,6 +222,7 @@ hypr/
     ├── monitor-listener         # Hyprland IPC -> location-switch
     ├── 99-hypr-location         # NetworkManager dispatcher (optional)
     ├── dpms-on-session-active   # logind D-Bus -> hyprctl dispatch dpms on
+    ├── dpms-on-input-active     # /dev/input -> hyprctl dispatch dpms on (idle-wake)
     ├── bt-call-mode             # Toggle Bluetooth headset HFP <-> A2DP
     ├── screenshot               # grim + slurp
     ├── screenshot_area
@@ -230,7 +231,8 @@ hypr/
 
 systemd/
 └── user/
-    └── hypr-dpms-on-session-active.service   # Wraps scripts/dpms-on-session-active
+    ├── hypr-dpms-on-session-active.service   # Wraps scripts/dpms-on-session-active
+    └── hypr-dpms-on-input-active.service     # Wraps scripts/dpms-on-input-active
 ```
 
 `monitors.conf` and `workspaces.conf` are runtime-generated symlinks. They are not in the repo; `install.sh` creates them on first run. `install.sh` also copies the `systemd/user/*.service` units to `~/.config/systemd/user/` and `enable --now`s them when `systemctl --user` is usable.
@@ -261,4 +263,5 @@ No real Hyprland required - everything is mocked. Pass `--skip-deps` to `install
 - Windows stay with their workspace across dock transitions. Unplug -> all 10 workspaces land on the laptop; replug -> workspaces re-home to their assigned monitors. Tiled layouts re-tile automatically. Floating windows keep absolute coords and may land oddly; nudge them.
 - `swaylock` / `swaylock-effects` is incompatible with Hyprland 0.40+ (no `ext-session-lock-v1`). Stick with `hyprlock`.
 - `hypr-dpms-on-session-active.service` watches logind for the graphical session flipping inactive -> active (VT switch back, resume from suspend, lid open) and dispatches `hyprctl dispatch dpms on`. `hypridle`'s own `on-resume` only fires on Wayland input events, so a long idle followed by a VT switch can otherwise leave the compositor stuck in `dpms off`. Disable with `systemctl --user disable --now hypr-dpms-on-session-active.service` if you don't want it.
+- `hypr-dpms-on-input-active.service` covers the other stuck-DPMS path: a plain input-wake from a pure idle `dpms off`, which produces no logind edge for the service above to catch. It reads `/dev/input/event*` directly and forces `dpms on` (escalating to `hyprctl reload` for a DisplayPort link that dropped during the blank), independent of the compositor's `ext-idle-notify` resume - which some GPUs/backends misfire. Requires membership in the `input` group (`sudo usermod -aG input $USER`, then re-login); the installer prints this if needed. It is gap-gated, so it only touches `hyprctl` on the first input after a pause - no cost during active use. Disable with `systemctl --user disable --now hypr-dpms-on-input-active.service`.
 - The `location-switch` idempotency guard compares symlink targets, so repeated firing while already in the right state is a no-op.
