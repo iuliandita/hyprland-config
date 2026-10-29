@@ -37,7 +37,7 @@ jobs:
             .backups
 
       - name: shfmt (2-space indent, check mode)
-        uses: luizm/action-sh-checker@v0.9.0
+        uses: luizm/action-sh-checker@v0.10.0
         env:
           SHFMT_OPTS: "-i 2 -ci -sr -d"
         with:
