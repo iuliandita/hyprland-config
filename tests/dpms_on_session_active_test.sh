@@ -135,8 +135,8 @@ test_replacement_graphical_session_active_edge_wakes_hyprland() {
 
   run_helper "$env"
 
-  calls="$(cat "$env/hyprctl.log" 2>/dev/null || true)"
-  args="$(cat "$env/gdbus.args" 2>/dev/null || true)"
+  calls="$(cat "$env/hyprctl.log" 2> /dev/null || true)"
+  args="$(cat "$env/gdbus.args" 2> /dev/null || true)"
   assert_contains "subscribes to all login1 session signals" "$args" "--dest org.freedesktop.login1"
   if [[ "$args" == *"--object-path"* ]]; then
     FAIL=$((FAIL + 1))
